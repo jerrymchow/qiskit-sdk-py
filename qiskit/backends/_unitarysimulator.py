@@ -52,13 +52,13 @@ Internal circuit_object::
             {
                 "name": , // required -- string
                 "params": , // optional -- list[double]
-                "qubits": , // optional -- list[int]
+                "qubits": , // required -- list[int]
                 "clbits": , //optional -- list[int]
                 "conditional":  // optional -- map
                     {
                         "type": , // string
-                        "mask": , // big int
-                        "val":  , // big int
+                        "mask": , // hex string 
+                        "val":  , // bhex string 
                     }
             },
         ]
@@ -90,33 +90,37 @@ returned results object::
             'state': 'DONE'
             }
 """
+import uuid
+import logging
 import numpy as np
-from ._simulatortools import enlarge_single_opt, enlarge_two_opt, single_gate_matrix
 import json
+from ._simulatortools import enlarge_single_opt, enlarge_two_opt, single_gate_matrix
+from qiskit._result import Result
+from qiskit.backends._basebackend import BaseBackend
+
+
+logger = logging.getLogger(__name__)
+
+
 # TODO add ["status"] = 'DONE', 'ERROR' especitally for empty circuit error
 # does not show up
 
-__configuration = {"name": "local_unitary_simulator",
-                   "url": "https://github.com/IBM/qiskit-sdk-py",
-                   "simulator": True,
-                   "description": "A python simulator for unitary matrix",
-                   "coupling_map": "all-to-all",
-                   "basis_gates": "u1,u2,u3,cx,id"}
 
-
-class UnitarySimulator(object):
+class UnitarySimulator(BaseBackend):
     """Python implementation of a unitary simulator."""
 
-    def __init__(self, job):
+    def __init__(self, configuration=None):
         """Initial the UnitarySimulator object."""
-        self.circuit = json.loads(job['compiled_circuit'].decode())
-        self._number_of_qubits = self.circuit['header']['number_of_qubits']
-        self.result = {}
-        self.result = {}
-        self.result['data'] = {}
-        self._unitary_state = np.identity(2**(self._number_of_qubits),
-                                          dtype=complex)
-        self._number_of_operations = len(self.circuit['operations'])
+        if configuration is None:
+            self._configuration = {'name': 'local_unitary_simulator',
+                                   'url': 'https://github.com/IBM/qiskit-sdk-py',
+                                   'simulator': True,
+                                   'local': True,
+                                   'description': 'A python simulator for unitary matrix',
+                                   'coupling_map': 'all-to-all',
+                                   'basis_gates': 'u1,u2,u3,cx,id'}
+        else:
+            self._configuration = configuration
 
     def _add_unitary_single(self, gate, qubit):
         """Apply the single-qubit gate.
@@ -140,9 +144,30 @@ class UnitarySimulator(object):
         unitaty_add = enlarge_two_opt(gate, q0, q1, self._number_of_qubits)
         self._unitary_state = np.dot(unitaty_add, self._unitary_state)
 
-    def run(self, silent=True):
+    def run(self, q_job):
+        """Run q_job
+
+        Args:
+        q_job (QuantumJob): job to run
+        """
+        # Generating a string id for the job
+        job_id = str(uuid.uuid4())
+        qobj = q_job.qobj
+        result_list = []
+        for circuit in qobj['circuits']:
+            result_list.append( self.run_circuit(circuit) )
+        return Result({'job_id': job_id, 'result': result_list, 'status': 'COMPLETED'},
+                      qobj)            
+
+    def run_circuit(self, circuit):
         """Apply the single-qubit gate."""
-        for operation in self.circuit['operations']:
+        ccircuit = circuit['compiled_circuit']
+        self._number_of_qubits = ccircuit['header']['number_of_qubits']
+        result = {}
+        result['data'] = {}
+        self._unitary_state = np.identity(2**(self._number_of_qubits),
+                                          dtype=complex)
+        for operation in ccircuit['operations']:
             if operation['name'] in ['U', 'u1', 'u2', 'u3']:
                 if 'params' in operation:
                     params = operation['params']
@@ -160,16 +185,16 @@ class UnitarySimulator(object):
                                  [0, 1, 0, 0]])
                 self._add_unitary_two(gate, qubit0, qubit1)
             elif operation['name'] == 'measure':
-                if silent is False:
-                    print('Warning have dropped measure from unitary simulator')
+                logger.info('Warning have dropped measure from unitary '
+                            'simulator')
             elif operation['name'] == 'reset':
-                if silent is False:
-                    print('Warning have dropped reset from unitary simulator')
+                logger.info('Warning have dropped reset from unitary '
+                            'simulator')
             elif operation['name'] == 'barrier':
                 pass
             else:
-                self.result['status'] = 'ERROR'
-                return self.result
-        self.result['data']['unitary'] = self._unitary_state
-        self.result['status'] = 'DONE'
-        return self.result
+                result['status'] = 'ERROR'
+                return result
+        result['data']['unitary'] = self._unitary_state
+        result['status'] = 'DONE'
+        return result

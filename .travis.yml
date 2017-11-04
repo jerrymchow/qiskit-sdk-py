@@ -18,10 +18,18 @@
 language: python
 
 python:
+  - "3.5"
   - "3.6"
 
 install:
-  - pip install -r requires.txt
-  - pip install -r requires-dev.txt
+  - pip install -r requirements.txt
+  - pip install -r requirements-dev.txt
 
 script: make test
+
+deploy:
+  provider: script
+  skip_cleanup: true
+  script: tools/ghpages-documentation-deploy.sh
+  on:
+    branch: stable
